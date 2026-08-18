@@ -5,10 +5,10 @@
 Iron Man Butler & Overhead Flight Radar Assistant
 ================================================================================
 Runs silently in the background on Windows. Listens for 3 claps / snaps (or wake-word "Jarvis").
-1. Greets the user in an ultra-realistic British Butler neural voice ("Ma'am").
+1. Greets the user in an ultra-realistic British Butler neural voice ("Sir").
 2. Queries live FlightRadar24 / OpenSky data to detect overhead aircraft within 150 km.
 3. If aircraft is detected: announces callsign, route, intercept time, and opens FlightRadar24.
-4. If no aircraft: delivers witty, female-tailored butler lines from phrases.json.
+4. If no aircraft: delivers witty, butler lines from phrases.json.
 ================================================================================
 """
 
@@ -23,6 +23,9 @@ import tempfile
 import threading
 import argparse
 import webbrowser
+import http.server
+import socketserver
+import urllib.parse
 from collections import deque
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -142,9 +145,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "sample_rate": 44100,
     "block_size": 1024,
     "voice": "en-GB-RyanNeural",
-    "enable_flight_check": true if "true" == "true" else True,
+    "enable_flight_check": True,
     "enable_jarvis_wake_word": False,
-    "auto_open_browser": True
+    "auto_open_browser": True,
+    "web_port": 8888,
+    "enable_web_dashboard": True
 }
 
 
@@ -184,9 +189,9 @@ class PhraseDeck:
     def _reload_if_needed(self) -> None:
         if not os.path.exists(self.phrases_file):
             self.phrases = [
-                "Hello ma'am, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?",
-                "Terrific timing, ma'am. Your suit is 80% charged. Iced coffee is on the table.",
-                "Good to see you again, ma'am. Your Porsche will reach by tonight."
+                "Hello Sir, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?",
+                "Terrific timing, Sir. Your suit is 80% charged. Iced coffee is on the table.",
+                "Good to see you again, Sir. Your Porsche will reach by tonight."
             ]
             return
 
@@ -222,7 +227,7 @@ class PhraseDeck:
         """Returns the next witty dialogue line from the deck."""
         self._reload_if_needed()
         if not self.phrases:
-            return "Welcome back ma'am. Systems are fully operational."
+            return "Welcome back Sir. Systems are fully operational."
 
         if not self.deck:
             self._reshuffle()
@@ -798,13 +803,352 @@ def start_wake_word_listener(on_wake_callback) -> Optional[threading.Thread]:
 # 8. MAIN JARVIS CONTROLLER & ORCHESTRATOR
 # ==============================================================================
 
+# ==============================================================================
+# 7.5 BUILT-IN WEB DASHBOARD SERVER TEMPLATE
+# ==============================================================================
+
+HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤖 CLAP-JARVIS HUD Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #070b14;
+            --card-bg: rgba(15, 23, 42, 0.75);
+            --border: rgba(0, 243, 255, 0.2);
+            --cyan: #00f3ff;
+            --blue: #0077ff;
+            --gold: #ffd700;
+            --green: #00ff88;
+            --red: #ff3366;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
+
+        body {
+            background-color: var(--bg);
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(0, 243, 255, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(0, 119, 255, 0.08) 0%, transparent 40%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            max-width: 1000px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 2rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 243, 255, 0.1);
+        }
+
+        .brand { display: flex; align-items: center; gap: 1rem; }
+        .arc-reactor {
+            width: 42px; height: 42px;
+            border-radius: 50%;
+            border: 2px solid var(--cyan);
+            box-shadow: 0 0 15px var(--cyan), inset 0 0 10px var(--cyan);
+            display: flex; justify-content: center; align-items: center;
+            animation: pulse 2s infinite ease-in-out;
+        }
+        .arc-inner { width: 18px; height: 18px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 12px var(--cyan)); }
+        }
+
+        h1 { font-size: 1.6rem; font-weight: 700; background: linear-gradient(135deg, #fff, var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .subtitle { font-size: 0.85rem; color: var(--muted); letter-spacing: 0.5px; }
+
+        .badge {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 1rem; border-radius: 20px;
+            background: rgba(0, 255, 136, 0.1); border: 1px solid var(--green);
+            color: var(--green); font-size: 0.85rem; font-weight: 600;
+        }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            display: flex; flex-direction: column; gap: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.1rem; font-weight: 600; color: var(--cyan);
+            display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 0.75rem;
+        }
+
+        .stat-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.95rem; }
+        .stat-label { color: var(--muted); }
+        .stat-value { font-weight: 600; font-family: 'JetBrains Mono', monospace; color: #fff; }
+
+        .btn {
+            background: linear-gradient(135deg, var(--cyan), var(--blue));
+            color: #000; border: none; padding: 0.85rem 1.4rem;
+            border-radius: 10px; font-weight: 700; font-size: 0.95rem;
+            cursor: pointer; transition: all 0.2s ease;
+            display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+            box-shadow: 0 4px 15px rgba(0, 243, 255, 0.25);
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0, 243, 255, 0.4); }
+        .btn:active { transform: translateY(0); }
+        .btn-sec { background: rgba(255, 255, 255, 0.08); color: var(--text); border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: none; }
+        .btn-sec:hover { background: rgba(255, 255, 255, 0.15); border-color: var(--cyan); }
+
+        .flight-hud {
+            background: rgba(0, 243, 255, 0.05); border: 1px solid rgba(0, 243, 255, 0.15);
+            border-radius: 12px; padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem;
+        }
+        .flight-callsign { font-size: 1.4rem; font-weight: 700; color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+        .flight-route { font-size: 0.95rem; color: var(--text); }
+
+        .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
+        .form-group label { font-size: 0.85rem; color: var(--muted); }
+        .form-control {
+            background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #fff; padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.9rem;
+            font-family: 'JetBrains Mono', monospace; outline: none; transition: border 0.2s;
+        }
+        .form-control:focus { border-color: var(--cyan); box-shadow: 0 0 8px rgba(0, 243, 255, 0.3); }
+
+        footer { margin-top: auto; font-size: 0.85rem; color: var(--muted); text-align: center; padding: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <div class="arc-reactor"><div class="arc-inner"></div></div>
+                <div>
+                    <h1>CLAP-JARVIS HUD</h1>
+                    <div class="subtitle">Iron Man Butler & Live Airspace Radar Assistant</div>
+                </div>
+            </div>
+            <div class="badge"><div class="dot"></div> ONLINE (Port <span id="port-display">8888</span>)</div>
+        </header>
+
+        <div class="grid">
+            <!-- Controls & Quick Actions -->
+            <div class="card">
+                <div class="card-title">⚡ Quick Actions</div>
+                <button class="btn" onclick="triggerButler()">🎤 Trigger Butler Voice</button>
+                <button class="btn btn-sec" onclick="scanAirspace()">📡 Scan Overhead Airspace</button>
+                <button class="btn btn-sec" onclick="testSpeech()">🔊 Test TTS Voice Output</button>
+                <div id="action-status" style="font-size: 0.85rem; color: var(--gold); min-height: 1.2rem;"></div>
+            </div>
+
+            <!-- Live Status HUD -->
+            <div class="card">
+                <div class="card-title">📊 System Telemetry</div>
+                <div class="stat-row"><span class="stat-label">Butler Voice:</span><span class="stat-value" id="voice-val">en-GB-RyanNeural</span></div>
+                <div class="stat-row"><span class="stat-label">GPS Latitude:</span><span class="stat-value" id="lat-val">28.6139</span></div>
+                <div class="stat-row"><span class="stat-label">GPS Longitude:</span><span class="stat-value" id="lon-val">77.2090</span></div>
+                <div class="stat-row"><span class="stat-label">Scan Radius:</span><span class="stat-value" id="radius-val">150 km</span></div>
+                <div class="stat-row"><span class="stat-label">Clap Threshold (Peak):</span><span class="stat-value" id="peak-val">0.22</span></div>
+                <div class="stat-row"><span class="stat-label">Snap Threshold (Peak):</span><span class="stat-value" id="snap-val">0.12</span></div>
+                <div class="stat-row"><span class="stat-label">Required Claps:</span><span class="stat-value" id="claps-val">3</span></div>
+            </div>
+        </div>
+
+        <!-- Airspace Scan Output -->
+        <div class="card">
+            <div class="card-title">✈️ Airspace Radar Intercept</div>
+            <div id="flight-container" class="flight-hud">
+                <div class="flight-callsign" id="flight-callsign">AIRSPACE SEARCH READY</div>
+                <div class="flight-route" id="flight-details">Click "Scan Overhead Airspace" or trigger JARVIS with 3 claps to scan live airspace.</div>
+            </div>
+        </div>
+
+        <!-- Configuration Deck -->
+        <div class="card">
+            <div class="card-title">⚙️ Live Settings Deck</div>
+            <form id="config-form" onsubmit="saveConfig(event)">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem;">
+                    <div class="form-group">
+                        <label>Latitude</label>
+                        <input type="number" step="0.0001" class="form-control" id="cfg-lat">
+                    </div>
+                    <div class="form-group">
+                        <label>Longitude</label>
+                        <input type="number" step="0.0001" class="form-control" id="cfg-lon">
+                    </div>
+                    <div class="form-group">
+                        <label>Radius (km)</label>
+                        <input type="number" step="1" class="form-control" id="cfg-radius">
+                    </div>
+                    <div class="form-group">
+                        <label>Voice</label>
+                        <select class="form-control" id="cfg-voice">
+                            <option value="en-GB-RyanNeural">en-GB-RyanNeural (British Ryan)</option>
+                            <option value="en-GB-ThomasNeural">en-GB-ThomasNeural (British Thomas)</option>
+                            <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (British Sonia)</option>
+                            <option value="en-US-GuyNeural">en-US-GuyNeural (American Guy)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Clap Sensitivity Peak (0.10 - 0.40)</label>
+                        <input type="number" step="0.01" class="form-control" id="cfg-peak">
+                    </div>
+                    <div class="form-group">
+                        <label>Dashboard Web Port</label>
+                        <input type="number" step="1" class="form-control" id="cfg-port">
+                    </div>
+                </div>
+                <button type="submit" class="btn" style="margin-top: 1rem; width: 100%;">💾 Save & Hot-Reload Settings</button>
+            </form>
+        </div>
+
+        <footer>🤖 JARVIS Background Daemon • Created for Windows</footer>
+    </div>
+
+    <script>
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                const cfg = data.config;
+                
+                document.getElementById('port-display').innerText = data.port || 8888;
+                document.getElementById('voice-val').innerText = cfg.voice || 'en-GB-RyanNeural';
+                document.getElementById('lat-val').innerText = cfg.latitude;
+                document.getElementById('lon-val').innerText = cfg.longitude;
+                document.getElementById('radius-val').innerText = cfg.radius_km + ' km';
+                document.getElementById('peak-val').innerText = cfg.threshold_peak;
+                document.getElementById('snap-val').innerText = cfg.threshold_snap_peak;
+                document.getElementById('claps-val').innerText = cfg.required_claps;
+
+                // Form defaults
+                if (!document.getElementById('cfg-lat').value) {
+                    document.getElementById('cfg-lat').value = cfg.latitude;
+                    document.getElementById('cfg-lon').value = cfg.longitude;
+                    document.getElementById('cfg-radius').value = cfg.radius_km;
+                    document.getElementById('cfg-voice').value = cfg.voice || 'en-GB-RyanNeural';
+                    document.getElementById('cfg-peak').value = cfg.threshold_peak;
+                    document.getElementById('cfg-port').value = cfg.web_port || 8888;
+                }
+            } catch(e) { console.error("Error loading status:", e); }
+        }
+
+        async function triggerButler() {
+            document.getElementById('action-status').innerText = "⏳ Triggering JARVIS Butler voice...";
+            try {
+                const res = await fetch('/api/trigger', { method: 'POST' });
+                const data = await res.json();
+                document.getElementById('action-status').innerText = "✅ " + data.message;
+            } catch(e) { document.getElementById('action-status').innerText = "❌ Error: " + e.message; }
+        }
+
+        async function scanAirspace() {
+            document.getElementById('action-status').innerText = "📡 Scanning overhead airspace...";
+            document.getElementById('flight-callsign').innerText = "SCANNING AIRSPACE...";
+            document.getElementById('flight-details').innerText = "Querying live FlightRadar24 and OpenSky API...";
+
+            try {
+                const res = await fetch('/api/test-flight', { method: 'POST' });
+                const data = await res.json();
+                if (data.aircraft) {
+                    const f = data.aircraft;
+                    document.getElementById('flight-callsign').innerText = "✈️ " + f.callsign;
+                    document.getElementById('flight-details').innerText = 
+                        `Route: ${f.origin_city} → ${f.dest_city} | Altitude: ${f.altitude} ft | Speed: ${f.speed_knots} kts | Distance: ${f.distance_km.toFixed(1)} km (${f.intercept_desc})`;
+                    document.getElementById('action-status').innerText = "✅ Aircraft detected overhead: " + f.callsign;
+                } else {
+                    document.getElementById('flight-callsign').innerText = "CLEAR AIRSPACE";
+                    document.getElementById('flight-details').innerText = "No aircraft overhead within " + (data.radius_km || 150) + " km radius right now.";
+                    document.getElementById('action-status').innerText = "ℹ️ No aircraft overhead right now.";
+                }
+            } catch(e) {
+                document.getElementById('flight-callsign').innerText = "SCAN ERROR";
+                document.getElementById('flight-details').innerText = e.message;
+                document.getElementById('action-status').innerText = "❌ Scan failed.";
+            }
+        }
+
+        async function testSpeech() {
+            document.getElementById('action-status').innerText = "🔊 Playing Butler speech test...";
+            try {
+                const res = await fetch('/api/test-speech', { method: 'POST' });
+                const data = await res.json();
+                document.getElementById('action-status').innerText = "✅ " + data.message;
+            } catch(e) { document.getElementById('action-status').innerText = "❌ Speech error: " + e.message; }
+        }
+
+        async function saveConfig(e) {
+            e.preventDefault();
+            document.getElementById('action-status').innerText = "💾 Saving configuration...";
+            const payload = {
+                latitude: parseFloat(document.getElementById('cfg-lat').value),
+                longitude: parseFloat(document.getElementById('cfg-lon').value),
+                radius_km: parseFloat(document.getElementById('cfg-radius').value),
+                voice: document.getElementById('cfg-voice').value,
+                threshold_peak: parseFloat(document.getElementById('cfg-peak').value),
+                web_port: parseInt(document.getElementById('cfg-port').value)
+            };
+
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                document.getElementById('action-status').innerText = "✅ Config saved & reloaded!";
+                fetchStatus();
+            } catch(err) { document.getElementById('action-status').innerText = "❌ Save error: " + err.message; }
+        }
+
+        fetchStatus();
+        setInterval(fetchStatus, 5000);
+    </script>
+</body>
+</html>"""
+
+
+# ==============================================================================
+# 8. MAIN JARVIS CONTROLLER & ORCHESTRATOR
+# ==============================================================================
+
 class JarvisAssistant:
     """
     Main background assistant controller. Coordinates audio detector,
     live FlightRadar24 tracking, British Butler neural TTS, and dynamic phrase deck.
+    Also starts built-in Web HUD Dashboard HTTP server on configurable port.
     """
-    def __init__(self):
+    def __init__(self, port_override: Optional[int] = None):
         self.config = load_config()
+        if port_override:
+            self.config["web_port"] = port_override
+        self.port = int(self.config.get("web_port", 8888))
         self.phrase_deck = PhraseDeck(PHRASES_PATH)
         self.tts = ButlerTTS(voice=self.config.get("voice", "en-GB-RyanNeural"))
         self.tracker = FlightRadarTracker(
@@ -814,6 +1158,102 @@ class JarvisAssistant:
         )
         self.detector = ClapAudioDetector(self.handle_trigger, self.config)
         self.is_busy = False
+        self.last_flight_info: Optional[Dict[str, Any]] = None
+        self.httpd = None
+
+    def start_web_server(self) -> None:
+        """Starts HTTP web server for the JARVIS HUD dashboard in a daemon thread."""
+        assistant_self = self
+
+        class DashboardHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass  # Suppress standard HTTP access logs
+
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path == "/" or parsed.path == "/index.html":
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(HTML_DASHBOARD_TEMPLATE.encode("utf-8"))
+                elif parsed.path == "/api/status":
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    status_data = {
+                        "status": "online",
+                        "port": assistant_self.port,
+                        "config": assistant_self.config,
+                        "last_flight": assistant_self.last_flight_info,
+                        "is_busy": assistant_self.is_busy
+                    }
+                    self.wfile.write(json.dumps(status_data).encode("utf-8"))
+                elif parsed.path == "/api/config":
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(assistant_self.config).encode("utf-8"))
+                else:
+                    self.send_error(404, "Not Found")
+
+            def do_POST(self):
+                parsed = urllib.parse.urlparse(self.path)
+                content_len = int(self.headers.get("Content-Length", 0))
+                post_body = self.rfile.read(content_len) if content_len > 0 else b""
+
+                if parsed.path == "/api/trigger":
+                    threading.Thread(target=assistant_self.handle_trigger, daemon=True).start()
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, "message": "Butler trigger executed!"}).encode("utf-8"))
+
+                elif parsed.path == "/api/test-flight":
+                    flight = assistant_self.tracker.get_closest_aircraft()
+                    assistant_self.last_flight_info = flight
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"aircraft": flight, "radius_km": assistant_self.config.get("radius_km", 150)}).encode("utf-8"))
+
+                elif parsed.path == "/api/test-speech":
+                    phrase = assistant_self.phrase_deck.get_next_phrase()
+                    threading.Thread(target=assistant_self.tts.speak, args=(phrase,), daemon=True).start()
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, "message": f"Speaking: '{phrase}'"}).encode("utf-8"))
+
+                elif parsed.path == "/api/config":
+                    try:
+                        new_cfg = json.loads(post_body.decode("utf-8"))
+                        assistant_self.config.update(new_cfg)
+                        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                            json.dump(assistant_self.config, f, indent=2)
+                        assistant_self.reload_settings()
+                        self.send_response(200)
+                        self.send_header("Content-type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"success": True, "config": assistant_self.config}).encode("utf-8"))
+                    except Exception as e:
+                        self.send_response(400)
+                        self.send_header("Content-type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                else:
+                    self.send_error(404, "Endpoint Not Found")
+
+        def run_server():
+            try:
+                socketserver.TCPServer.allow_reuse_address = True
+                self.httpd = socketserver.TCPServer(("0.0.0.0", self.port), DashboardHandler)
+                print(f"🌐 JARVIS Web Dashboard listening on http://localhost:{self.port}")
+                self.httpd.serve_forever()
+            except Exception as e:
+                print(f"[!] Could not start Web Dashboard on port {self.port}: {e}")
+
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
 
     def reload_settings(self) -> None:
         """Hot-reloads config.json and updates tracker, TTS, and audio detector."""
@@ -841,6 +1281,7 @@ class JarvisAssistant:
             if enable_flight:
                 print("📡 Scanning overhead airspace for live aircraft...")
                 flight_info = self.tracker.get_closest_aircraft()
+                self.last_flight_info = flight_info
 
             if flight_info:
                 # Airplane overhead detected!
@@ -851,7 +1292,7 @@ class JarvisAssistant:
                 intercept = flight_info.get("intercept_desc", "overhead")
 
                 speech_text = (
-                    f"Good day ma'am. Attention: Aircraft {callsign}, traveling from {origin} to {dest} "
+                    f"Good day Sir. Attention: Aircraft {callsign}, traveling from {origin} to {dest} "
                     f"at {alt} feet, {intercept}."
                 )
                 self.tts.speak(speech_text)
@@ -868,13 +1309,13 @@ class JarvisAssistant:
                     print(f"🌐 Launching FlightRadar24: {url}")
                     webbrowser.open(url)
             else:
-                # No aircraft overhead -> Speak witty female-tailored butler line
+                # No aircraft overhead -> Speak witty butler line
                 line = self.phrase_deck.get_next_phrase()
                 self.tts.speak(line)
 
         except Exception as e:
             print(f"[!] Trigger execution error: {e}")
-            self.tts.speak("Welcome back ma'am. All systems are operational.")
+            self.tts.speak("Welcome back Sir. All systems are operational.")
         finally:
             # Re-enable detection after cooldown
             cooldown = float(self.config.get("cooldown_seconds", 5.0))
@@ -883,6 +1324,9 @@ class JarvisAssistant:
 
     def run(self) -> None:
         """Starts the background audio stream and enters the run loop."""
+        if self.config.get("enable_web_dashboard", True):
+            self.start_web_server()
+
         print("=" * 70)
         print("🤖 CLAP-JARVIS IS ONLINE")
         print("=" * 70)
@@ -890,6 +1334,7 @@ class JarvisAssistant:
         print(f"• Detection: Listening for {self.config.get('required_claps', 3)} claps/snaps within {self.config.get('window_seconds', 4.5)}s.")
         print(f"• Location: Lat {self.config.get('latitude')}, Lon {self.config.get('longitude')} (Radius: {self.config.get('radius_km')} km)")
         print(f"• Voice: {self.config.get('voice', 'en-GB-RyanNeural')}")
+        print(f"• Web HUD Dashboard: http://localhost:{self.port}")
         print("• Press Ctrl+C in this window to stop.\n")
 
         self.detector.start()
@@ -912,6 +1357,12 @@ class JarvisAssistant:
 # ==============================================================================
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
     parser = argparse.ArgumentParser(
         description="CLAP-JARVIS: Iron Man Butler & Overhead Flight Radar Assistant for Windows"
     )
@@ -919,6 +1370,7 @@ def main():
     parser.add_argument("--test-speech", action="store_true", help="Test British neural butler TTS output")
     parser.add_argument("--test-flight", action="store_true", help="Test live FlightRadar24 overhead scan")
     parser.add_argument("--headless", action="store_true", help="Run in silent background daemon mode")
+    parser.add_argument("--port", type=int, default=None, help="Port to run JARVIS Web Dashboard on (default: 8888)")
 
     args = parser.parse_args()
 
@@ -956,9 +1408,10 @@ def main():
         return
 
     # Default run mode
-    jarvis = JarvisAssistant()
+    jarvis = JarvisAssistant(port_override=args.port)
     jarvis.run()
 
 
 if __name__ == "__main__":
     main()
+
