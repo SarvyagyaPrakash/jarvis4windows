@@ -15,7 +15,5 @@
   "voice": "en-GB-RyanNeural",
   "enable_flight_check": true,
   "enable_jarvis_wake_word": false,
-  "auto_open_browser": true,
-  "web_port": 8888,
-  "enable_web_dashboard": true
+  "auto_open_browser": true
 }

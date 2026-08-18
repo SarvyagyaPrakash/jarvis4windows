@@ -1,154 +1,132 @@
-# 🤖 CLAP-JARVIS for Windows
-> **Iron Man British Butler & Overhead Flight Radar Assistant**
+# 👏 clap-jarvis (Windows Edition)
+> **Iron Man British Butler & Live Overhead Flight Radar Assistant for Windows**
 
-`clap-jarvis` is a standalone Python background assistant built specifically for Windows. Inspired by Iron Man's JARVIS, it runs silently 24/7 with near-zero CPU footprint. When you clap or snap **3 times** (or say the wake-word *"Jarvis"*), JARVIS triggers:
-
-1. **Neural British Butler Voice**: Greets you in an ultra-realistic British Butler voice (`en-GB-RyanNeural`), addressed to *"Ma'am"*.
-2. **Live FlightRadar24 Overhead Tracking**: Scans live airspace within 150 km of your GPS coordinates.
-3. **Flight Intercept Prediction**: If an aircraft is overhead, announces its callsign, origin, destination, and calculated intercept time, then automatically opens the live radar page in your default browser.
-4. **Witty Female-Tailored Butler Dialogue**: If no aircraft is overhead, delivers witty, Iron Man-style lines from a full-cycle non-repeating shuffle deck.
+`clap-jarvis` is your personal Windows background assistant inspired by Iron Man's JARVIS. It runs quietly 24/7 in the background with near-zero CPU footprint. Snap or clap **3 times** (or say *"Jarvis"*), and JARVIS will respond in an ultra-realistic British Butler neural voice and automatically open FlightRadar24 focused on any airplane flying overhead!
 
 ---
 
-## 📸 Key Features
+## 🎯 How It Works Day-to-Day
 
-- **⚡ Advanced Percussive Transient DSP**: Distinguishes sharp hand claps and finger snaps from room noise using Peak amplitude, RMS noise floor, and Crest Factor (`Peak / (RMS + 1e-6)`).
-- **🛡️ Re-trigger & Echo Prevention**: 80ms minimum debounce between transients and a 5-second cooldown after speech to ensure JARVIS's voice never re-triggers the microphone.
-- **✈️ FlightRadar24 + OpenSky Dual Engine**: Real-time bounding box queries with automatic fallback to OpenSky Network API, calculating Haversine great-circle distance, bearing, and estimated intercept time.
-- **🎙️ Neural TTS & SAPI Fallback**: High-fidelity speech synthesis via `edge-tts` with offline fallback to native Windows SAPI voices (`pyttsx3`). Asynchronous `pygame.mixer` playback prevents audio stream interruptions.
-- **🔄 Hot-Reloading & Full-Cycle Shuffle Deck**: Modify `config.json` and `phrases.json` in real time without restarting the background service. The shuffle deck ensures every phrase is spoken once before reshuffling.
-- **🎛️ Live Calibration CLI Mode**: Built-in 30-second live ASCII VU meter (`python clap_jarvis.py --calibrate`) for precision threshold tuning.
-- **🪟 Windows Background Native**: Headless execution via `pythonw.exe`, Windows Toast notification banners, and one-click automation batch scripts.
+### 1. Triggering JARVIS
+Just clap your hands 3 times or snap your fingers 3 times in quick succession anywhere near your Windows PC microphone:
+
+- 👏 **3 Hand Claps**
+- 🤌 **3 Finger Snaps** *(even light / quiet snaps work!)*
+- 🗣️ **Wake-Word**: Spoken *"Jarvis"* activation (optional)
+
+### 2. What Happens Next
+1. **Airspace Intercept Check**: JARVIS queries live FlightRadar24 API for aircraft flying overhead within 150 km of your GPS coordinates.
+2. **Airplane Overhead Detected**: JARVIS announces the flight details aloud (e.g., *"Good day Sir. Attention: Aircraft AIC101, traveling from Delhi to London Heathrow at 35,000 feet..."*) and automatically opens FlightRadar24 directly focusing on that exact plane in your default browser.
+3. **Clear Airspace**: If no airplane is overhead, JARVIS greets you with a witty Iron Man butler line from `phrases.json` (e.g., *"Hello Sir, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?"*).
 
 ---
 
-## 📁 Project Structure
+## 🚀 Step-by-Step Setup Guide (Windows)
 
-```text
-clap-jarvis/
-├── clap_jarvis.py       # Core audio DSP, FlightRadar24 tracker, neural TTS, calibration
-├── config.json          # Live settings (lat/lon, radius, audio thresholds, voice)
-├── phrases.json         # Female-tailored butler dialogue lines
-├── requirements.txt     # Python dependencies
-├── install.bat          # 1-Click Windows installer (creates .venv, installs packages)
-├── start.bat            # Silent background launcher (pythonw.exe + Toast banner)
-├── stop.bat             # Background process terminator + Toast banner
-├── toggle.bat           # ON/OFF toggle with Windows Toast notifications
-├── uninstall.bat        # Clean uninstaller
-└── README.md            # User manual and documentation
+### Step 1: Prerequisites
+- Installed **Python 3.10+** on Windows ([python.org](https://www.python.org/downloads/)).
+- ⚠️ Make sure **"Add Python to PATH"** was checked during installation.
+
+### Step 2: Download / Clone Project
+```cmd
+git clone https://github.com/SarvyagyaPrakash/jarvis4windows.git
+cd jarvis4windows
 ```
 
----
-
-## 🚀 Quick Start (Windows)
-
-### 1. Installation (1-Click)
-Double-click **`install.bat`** or run:
+### Step 3: Installation (1-Click)
+Double-click **`install.bat`** or run in Command Prompt:
 ```cmd
 install.bat
 ```
-This automatically creates a virtual environment (`.venv`) and installs all required dependencies.
-
-### 2. Microphone Calibration
-To test your microphone and adjust detection thresholds:
-```cmd
-.venv\Scripts\python.exe clap_jarvis.py --calibrate
-```
-Snap and clap into your microphone. Watch the live ASCII VU meter for Peak, RMS, and Crest Factor feedback.
-
-### 3. Background Controls
-- **Start JARVIS silently**: Double-click **`start.bat`** (shows `JARVIS 🟢 Active` toast).
-- **Stop JARVIS**: Double-click **`stop.bat`** (shows `JARVIS 🛑 Stopped` toast).
-- **Toggle ON / OFF**: Double-click **`toggle.bat`**.
+*Creates `.venv` virtual environment and automatically installs all dependencies (`sounddevice`, `numpy`, `edge-tts`, `pygame`, `pyttsx3`, `requests`, `SpeechRecognition`).*
 
 ---
 
-## ⚙️ Configuration (`config.json`)
+## 🎛️ How to Turn JARVIS ON & OFF
 
-Settings reload automatically on every trigger—no restart needed!
+You can manage JARVIS in the background using quick batch scripts or PowerShell:
+
+### Method A: Double-Click Batch Scripts (Easiest)
+- **`start.bat`**: Starts JARVIS silently in background (`pythonw.exe`) with `JARVIS 🟢 Active` Windows Toast notification.
+- **`stop.bat`**: Deactivates the background process with `JARVIS 🛑 Stopped` Toast notification.
+- **`toggle.bat`**: Double-click to instantly toggle JARVIS ON 🟢 or OFF 🛑.
+
+### Method B: Terminal / Command Line
+```cmd
+# Run in terminal window:
+.venv\Scripts\python.exe clap_jarvis.py
+
+# Run in silent headless daemon mode:
+.venv\Scripts\python.exe clap_jarvis.py --headless
+```
+
+---
+
+## 💬 Customizing What JARVIS Says (`phrases.json`)
+
+You can edit, add, or remove butler dialogue lines anytime by opening `phrases.json` in any text editor:
+
+```json
+[
+  "Hello Sir, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?",
+  "Terrific timing, Sir. Your suit is 80% charged. Iced coffee is on the table.",
+  "Good to see you again, Sir. Your Porsche will reach by tonight.",
+  "One hundred missed calls from your girlfriend. Good luck, Sir. I am muting myself.",
+  "Welcome back, Sir. Your Pizza is on the way. Do you want me to turn on the Xbox?",
+  "Sir, Peter Parker has sent a message: Need Money for Web Fluid!"
+]
+```
+💡 Save the file and JARVIS updates his dialogue lines instantly—**no restart needed!**
+
+---
+
+## 🗺️ Setting Your Location for Overhead Flight Tracking (`config.json`)
+
+Open `config.json` to configure your GPS coordinates and scan radius:
 
 ```json
 {
   "latitude": 28.6139,
   "longitude": 77.2090,
   "radius_km": 150.0,
+  "voice": "en-GB-RyanNeural",
   "threshold_peak": 0.22,
   "threshold_snap_peak": 0.12,
   "min_crest_factor": 4.0,
-  "threshold_rms": 0.006,
   "required_claps": 3,
   "window_seconds": 4.5,
   "cooldown_seconds": 5.0,
-  "debounce_ms": 80,
-  "sample_rate": 44100,
-  "block_size": 1024,
-  "voice": "en-GB-RyanNeural",
   "enable_flight_check": true,
-  "enable_jarvis_wake_word": false,
   "auto_open_browser": true
 }
 ```
 
-### Parameter Reference
-| Parameter | Default | Description |
-| :--- | :--- | :--- |
-| `latitude` / `longitude` | `28.6139`, `77.2090` | Your GPS coordinates (replace with your location) |
-| `radius_km` | `150.0` | Airspace detection radius around your location |
-| `threshold_peak` | `0.22` | Minimum peak amplitude for hand claps (0.0 to 1.0) |
-| `threshold_snap_peak` | `0.12` | Minimum peak amplitude for finger snaps |
-| `min_crest_factor` | `4.0` | Transient sharpness ratio (`Peak / RMS`) |
-| `required_claps` | `3` | Number of claps/snaps required to trigger JARVIS |
-| `window_seconds` | `4.5` | Time window to record required claps |
-| `cooldown_seconds` | `5.0` | Cooldown period after speaking to prevent self-trigger |
-| `voice` | `en-GB-RyanNeural` | Microsoft Neural Butler voice (`en-GB-RyanNeural`, `en-GB-ThomasNeural`) |
-| `enable_flight_check` | `true` | Enable live overhead flight scanning |
-| `enable_jarvis_wake_word`| `false` | Enable spoken "Jarvis" wake-word detection |
-| `auto_open_browser` | `true` | Open FlightRadar24 flight link when aircraft is overhead |
+Replace `latitude` and `longitude` with your coordinates (obtainable from Google Maps or GPS apps).
 
 ---
 
-## 💬 Customizing Butler Dialogue (`phrases.json`)
+## 🔍 Diagnostics & Sensitivity Calibration
 
-Edit `phrases.json` at any time with your favorite lines:
-
-```json
-[
-  "Hello ma'am, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?",
-  "Terrific timing, ma'am. Your suit is 80% charged. Iced coffee is on the table.",
-  "Good to see you again, ma'am. Your Porsche will reach by tonight.",
-  "One hundred missed calls from your boyfriend. Good luck, ma'am. I am muting myself.",
-  "Welcome back, ma'am. Your Pizza is on the way. Do you want me to turn on the Xbox?",
-  "Ma'am, Peter Parker has sent a message: Need Money for Web Fluid!"
-]
-```
-
----
-
-## 🛠️ CLI Diagnostics & Testing
-
+### Live VU Meter Calibration
+To test your microphone and adjust clap/snap detection sensitivity:
 ```cmd
-# Test neural speech output:
-.venv\Scripts\python.exe clap_jarvis.py --test-speech
-
-# Test live FlightRadar24 overhead airspace scan:
-.venv\Scripts\python.exe clap_jarvis.py --test-flight
-
-# Run live ASCII VU meter calibration:
 .venv\Scripts\python.exe clap_jarvis.py --calibrate
 ```
+Clap or snap near your mic. The 30-second live ASCII meter will display real-time Peak, RMS, and Crest Factor values so you can fine-tune `threshold_peak` or `min_crest_factor` in `config.json`.
+
+### Testing Commands
+```cmd
+# Test British Butler speech output:
+.venv\Scripts\python.exe clap_jarvis.py --test-speech
+
+# Test live FlightRadar24 overhead scan:
+.venv\Scripts\python.exe clap_jarvis.py --test-flight
+```
 
 ---
 
-## 💡 Troubleshooting for Windows
-
-1. **Microphone not triggering?**
-   - Run `--calibrate` to inspect your input levels.
-   - If your microphone is quiet, lower `threshold_peak` to `0.15` and `threshold_snap_peak` to `0.08` in `config.json`.
-2. **False triggers from music or speech?**
-   - Increase `min_crest_factor` to `5.0` or `5.5` in `config.json`.
-3. **No sound playing?**
-   - Check Windows default audio output device.
-   - Ensure an internet connection is active for `edge-tts`. If offline, JARVIS automatically falls back to Windows native SAPI (`pyttsx3`).
-4. **Auto-Start on Windows Boot (Optional)**:
-   - Press `Win + R`, type `shell:startup`, and press Enter.
-   - Create a shortcut to `start.bat` in this folder.
+## 🗑️ How to Uninstall
+To stop all background instances and clean up:
+```cmd
+uninstall.bat
+```
