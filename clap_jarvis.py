@@ -131,13 +131,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "latitude": 28.6139,
     "longitude": 77.2090,
     "radius_km": 150.0,
-    "threshold_peak": 0.22,
-    "threshold_snap_peak": 0.12,
-    "min_crest_factor": 4.0,
-    "threshold_rms": 0.006,
+    "threshold_peak": 0.06,
+    "threshold_snap_peak": 0.04,
+    "min_crest_factor": 2.8,
+    "threshold_rms": 0.001,
     "required_claps": 3,
-    "window_seconds": 4.5,
-    "cooldown_seconds": 5.0,
+    "window_seconds": 5.0,
+    "cooldown_seconds": 4.0,
     "debounce_ms": 80,
     "sample_rate": 44100,
     "block_size": 1024,
@@ -608,6 +608,7 @@ class ClapAudioDetector:
         self.cooldown_until: float = 0.0
         self.stream: Optional[sd.InputStream] = None
         self.running: bool = False
+        self.noise_floor: float = 0.002
 
     def update_config(self, config: Dict[str, Any]) -> None:
         self.config = config
@@ -630,32 +631,39 @@ class ClapAudioDetector:
         rms = float(np.sqrt(np.mean(audio_data ** 2)))
         crest_factor = peak / (rms + 1e-6)
 
-        th_peak = float(self.config.get("threshold_peak", 0.22))
-        th_snap_peak = float(self.config.get("threshold_snap_peak", 0.12))
-        th_rms = float(self.config.get("threshold_rms", 0.006))
-        min_crest = float(self.config.get("min_crest_factor", 4.0))
+        # Smoothly track ambient background noise floor
+        self.noise_floor = 0.96 * self.noise_floor + 0.04 * max(rms, 0.0005)
+
+        th_peak = float(self.config.get("threshold_peak", 0.06))
+        th_snap_peak = float(self.config.get("threshold_snap_peak", 0.04))
+        th_rms = float(self.config.get("threshold_rms", 0.001))
+        min_crest = float(self.config.get("min_crest_factor", 2.8))
         debounce_sec = float(self.config.get("debounce_ms", 80)) / 1000.0
 
+        # Transient spike ratio above background noise floor
+        spike_ratio = peak / (self.noise_floor + 1e-6)
+
         is_clap = (peak >= th_peak) and (crest_factor >= min_crest) and (rms >= th_rms)
-        is_snap = (peak >= th_snap_peak) and (crest_factor >= (min_crest * 1.2)) and (rms < (th_peak * 0.45))
+        is_snap = (peak >= th_snap_peak) and (spike_ratio >= 3.0 or crest_factor >= (min_crest * 0.9))
 
         if is_clap or is_snap:
             if (now - self.last_event_time) >= debounce_sec:
                 self.last_event_time = now
                 event_type = "CLAP" if is_clap else "SNAP"
-                self.recent_events.append((now, event_type))
-                print(f"⚡ [{event_type}] Detected! (Peak: {peak:.3f}, Crest: {crest_factor:.1f}, RMS: {rms:.4f})")
 
-                # Prune events outside window_seconds
-                window_sec = float(self.config.get("window_seconds", 4.5))
+                # Prune events outside window_seconds first
+                window_sec = float(self.config.get("window_seconds", 5.0))
                 while self.recent_events and (now - self.recent_events[0][0]) > window_sec:
                     self.recent_events.popleft()
 
+                self.recent_events.append((now, event_type))
                 required_claps = int(self.config.get("required_claps", 3))
+                print(f"⚡ [{event_type}] Detected! ({len(self.recent_events)}/{required_claps}) [Peak: {peak:.3f}, Crest: {crest_factor:.1f}, RMS: {rms:.4f}]")
+
                 if len(self.recent_events) >= required_claps:
                     print(f"\n🎯 [TRIGGER REACHED]: {len(self.recent_events)} transient pulses in window! Activating JARVIS...\n")
                     self.recent_events.clear()
-                    cooldown = float(self.config.get("cooldown_seconds", 5.0))
+                    cooldown = float(self.config.get("cooldown_seconds", 4.0))
                     self.set_cooldown(cooldown)
                     # Trigger action asynchronously
                     threading.Thread(target=self.on_triggered, daemon=True).start()
