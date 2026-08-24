@@ -5,10 +5,10 @@
 Iron Man Butler & Overhead Flight Radar Assistant
 ================================================================================
 Runs silently in the background on Windows. Listens for 3 claps / snaps (or wake-word "Jarvis").
-1. Greets the user in an ultra-realistic British Butler neural voice ("Ma'am").
+1. Greets the user in an ultra-realistic British Butler neural voice ("Sir").
 2. Queries live FlightRadar24 / OpenSky data to detect overhead aircraft within 150 km.
 3. If aircraft is detected: announces callsign, route, intercept time, and opens FlightRadar24.
-4. If no aircraft: delivers witty, female-tailored butler lines from phrases.json.
+4. If no aircraft: delivers witty, butler lines from phrases.json.
 ================================================================================
 """
 
@@ -131,18 +131,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "latitude": 28.6139,
     "longitude": 77.2090,
     "radius_km": 150.0,
-    "threshold_peak": 0.22,
-    "threshold_snap_peak": 0.12,
-    "min_crest_factor": 4.0,
-    "threshold_rms": 0.006,
+    "threshold_peak": 0.15,
+    "threshold_snap_peak": 0.07,
+    "min_crest_factor": 2.0,
+    "threshold_rms": 0.001,
     "required_claps": 3,
-    "window_seconds": 4.5,
-    "cooldown_seconds": 5.0,
-    "debounce_ms": 80,
+    "window_seconds": 5.0,
+    "cooldown_seconds": 6.0,
+    "debounce_ms": 60,
     "sample_rate": 44100,
     "block_size": 1024,
     "voice": "en-GB-RyanNeural",
-    "enable_flight_check": true if "true" == "true" else True,
+    "enable_flight_check": True,
     "enable_jarvis_wake_word": False,
     "auto_open_browser": True
 }
@@ -184,9 +184,9 @@ class PhraseDeck:
     def _reload_if_needed(self) -> None:
         if not os.path.exists(self.phrases_file):
             self.phrases = [
-                "Hello ma'am, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?",
-                "Terrific timing, ma'am. Your suit is 80% charged. Iced coffee is on the table.",
-                "Good to see you again, ma'am. Your Porsche will reach by tonight."
+                "Hello Sir, welcome back. Preferred choice of vibe today: Tame Impala or ACDC?",
+                "Terrific timing, Sir. Your suit is 80% charged. Iced coffee is on the table.",
+                "Good to see you again, Sir. Your Porsche will reach by tonight."
             ]
             return
 
@@ -222,7 +222,7 @@ class PhraseDeck:
         """Returns the next witty dialogue line from the deck."""
         self._reload_if_needed()
         if not self.phrases:
-            return "Welcome back ma'am. Systems are fully operational."
+            return "Welcome back Sir. Systems are fully operational."
 
         if not self.deck:
             self._reshuffle()
@@ -305,10 +305,13 @@ class ButlerTTS:
         except Exception as e:
             print(f"[!] Playback error: {e}")
 
-    def speak(self, text: str) -> None:
-        """Speaks the text asynchronously in a background worker thread."""
-        thread = threading.Thread(target=self._speak_worker, args=(text,), daemon=True)
-        thread.start()
+    def speak(self, text: str, block: bool = False) -> None:
+        """Speaks the text synchronously (if block=True) or asynchronously in a worker thread."""
+        if block:
+            self._speak_worker(text)
+        else:
+            thread = threading.Thread(target=self._speak_worker, args=(text,), daemon=True)
+            thread.start()
 
     def _speak_worker(self, text: str) -> None:
         with self._lock:
@@ -608,6 +611,7 @@ class ClapAudioDetector:
         self.cooldown_until: float = 0.0
         self.stream: Optional[sd.InputStream] = None
         self.running: bool = False
+        self.noise_floor: float = 0.002
 
     def update_config(self, config: Dict[str, Any]) -> None:
         self.config = config
@@ -630,32 +634,38 @@ class ClapAudioDetector:
         rms = float(np.sqrt(np.mean(audio_data ** 2)))
         crest_factor = peak / (rms + 1e-6)
 
-        th_peak = float(self.config.get("threshold_peak", 0.22))
-        th_snap_peak = float(self.config.get("threshold_snap_peak", 0.12))
-        th_rms = float(self.config.get("threshold_rms", 0.006))
-        min_crest = float(self.config.get("min_crest_factor", 4.0))
-        debounce_sec = float(self.config.get("debounce_ms", 80)) / 1000.0
+        # Smoothly track ambient background noise floor
+        self.noise_floor = 0.96 * self.noise_floor + 0.04 * max(rms, 0.0005)
 
-        is_clap = (peak >= th_peak) and (crest_factor >= min_crest) and (rms >= th_rms)
-        is_snap = (peak >= th_snap_peak) and (crest_factor >= (min_crest * 1.2)) and (rms < (th_peak * 0.45))
+        th_peak = float(self.config.get("threshold_peak", 0.15))
+        th_snap_peak = float(self.config.get("threshold_snap_peak", 0.07))
+        th_rms = float(self.config.get("threshold_rms", 0.001))
+        min_crest = float(self.config.get("min_crest_factor", 2.0))
+        debounce_sec = float(self.config.get("debounce_ms", 60)) / 1000.0
 
-        if is_clap or is_snap:
+        # Transient spike ratio above background noise floor
+        spike_ratio = peak / (self.noise_floor + 1e-6)
+
+        is_pulse = (peak >= th_snap_peak) and (crest_factor >= min_crest or spike_ratio >= 2.0)
+
+        if is_pulse:
             if (now - self.last_event_time) >= debounce_sec:
                 self.last_event_time = now
-                event_type = "CLAP" if is_clap else "SNAP"
-                self.recent_events.append((now, event_type))
-                print(f"⚡ [{event_type}] Detected! (Peak: {peak:.3f}, Crest: {crest_factor:.1f}, RMS: {rms:.4f})")
+                event_type = "CLAP" if peak >= th_peak else "SNAP"
 
-                # Prune events outside window_seconds
-                window_sec = float(self.config.get("window_seconds", 4.5))
+                # Prune events outside window_seconds first
+                window_sec = float(self.config.get("window_seconds", 5.0))
                 while self.recent_events and (now - self.recent_events[0][0]) > window_sec:
                     self.recent_events.popleft()
 
+                self.recent_events.append((now, event_type))
                 required_claps = int(self.config.get("required_claps", 3))
+                print(f"⚡ [{event_type}] Detected! ({len(self.recent_events)}/{required_claps}) [Peak: {peak:.3f}, Crest: {crest_factor:.1f}, RMS: {rms:.4f}]")
+
                 if len(self.recent_events) >= required_claps:
                     print(f"\n🎯 [TRIGGER REACHED]: {len(self.recent_events)} transient pulses in window! Activating JARVIS...\n")
                     self.recent_events.clear()
-                    cooldown = float(self.config.get("cooldown_seconds", 5.0))
+                    cooldown = float(self.config.get("cooldown_seconds", 4.0))
                     self.set_cooldown(cooldown)
                     # Trigger action asynchronously
                     threading.Thread(target=self.on_triggered, daemon=True).start()
@@ -832,6 +842,8 @@ class JarvisAssistant:
             return
 
         self.is_busy = True
+        # Mute audio detection for 15s during execution to avoid hearing own voice
+        self.detector.set_cooldown(15.0)
         self.reload_settings()
 
         try:
@@ -851,10 +863,10 @@ class JarvisAssistant:
                 intercept = flight_info.get("intercept_desc", "overhead")
 
                 speech_text = (
-                    f"Good day ma'am. Attention: Aircraft {callsign}, traveling from {origin} to {dest} "
+                    f"Good day Sir. Attention: Aircraft {callsign}, traveling from {origin} to {dest} "
                     f"at {alt} feet, {intercept}."
                 )
-                self.tts.speak(speech_text)
+                self.tts.speak(speech_text, block=True)
 
                 # Automatically open FlightRadar24 in default browser
                 if self.config.get("auto_open_browser", True):
@@ -868,16 +880,16 @@ class JarvisAssistant:
                     print(f"🌐 Launching FlightRadar24: {url}")
                     webbrowser.open(url)
             else:
-                # No aircraft overhead -> Speak witty female-tailored butler line
+                # No aircraft overhead -> Speak witty butler line
                 line = self.phrase_deck.get_next_phrase()
-                self.tts.speak(line)
+                self.tts.speak(line, block=True)
 
         except Exception as e:
             print(f"[!] Trigger execution error: {e}")
-            self.tts.speak("Welcome back ma'am. All systems are operational.")
+            self.tts.speak("Welcome back Sir. All systems are operational.", block=True)
         finally:
-            # Re-enable detection after cooldown
-            cooldown = float(self.config.get("cooldown_seconds", 5.0))
+            # Re-enable detection after post-speech cooldown
+            cooldown = float(self.config.get("cooldown_seconds", 8.0))
             self.detector.set_cooldown(cooldown)
             self.is_busy = False
 
@@ -912,6 +924,12 @@ class JarvisAssistant:
 # ==============================================================================
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
     parser = argparse.ArgumentParser(
         description="CLAP-JARVIS: Iron Man Butler & Overhead Flight Radar Assistant for Windows"
     )
@@ -962,3 +980,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

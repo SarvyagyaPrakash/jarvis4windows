@@ -19,6 +19,6 @@ for /f "tokens=2 delims=," %%I in ('wmic process where "name='pythonw.exe' and c
 start "" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0clap_jarvis.py" --headless
 
 :: Display Windows Toast / Balloon notification
-powershell -Command "[reflection.assembly]::loadwithpartialname('System.Windows.Forms'); $notify = New-Object System.Windows.Forms.NotifyIcon; $notify.Icon = [System.Drawing.SystemIcons]::Information; $notify.Visible = $true; $notify.ShowBalloonTip(4000, 'JARVIS 🟢 Active', 'Iron Man Butler is listening in the background for 3 claps / snaps.', [System.Windows.Forms.ToolTipIcon]::Info)" >nul 2>&1
+powershell -Command "[reflection.assembly]::loadwithpartialname('System.Windows.Forms'); $notify = New-Object System.Windows.Forms.NotifyIcon; $notify.Icon = [System.Drawing.SystemIcons]::Information; $notify.Visible = $true; $notify.ShowBalloonTip(4000, 'JARVIS 🟢 Active', 'Iron Man Butler is active in background listening for 3 claps / snaps.', [System.Windows.Forms.ToolTipIcon]::Info)" >nul 2>&1
 
 echo [*] JARVIS started successfully in the background.
